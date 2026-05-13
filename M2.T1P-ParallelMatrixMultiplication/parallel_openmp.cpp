@@ -1,68 +1,64 @@
-// ============================================================================
-// FILE        : parallel_openmp.cpp
-// TASK        : M2.T1P — Parallel Matrix Multiplication (OpenMP)
-// UNIT        : SIT315 Programming Paradigms, Trimester 4, 2024-25
-// AUTHOR      : Jahan Garg | Roll: 2410994805
-// DESCRIPTION : Parallelises C = A x B using OpenMP's #pragma omp parallel
-//               for with collapse(2) and static scheduling. Unlike std::thread,
-//               OpenMP uses a pre-initialised thread pool (no creation cost
-//               per call) and exposes N^2 independent tasks (via collapse)
-//               rather than N row-level tasks, yielding finer load balance.
-//               No race condition exists: each (i,j) pair writes exclusively
-//               to C[i*N+j] — a unique memory location.
-// COMPILE     : g++ -std=c++11 -O2 -fopenmp parallel_openmp.cpp -o parallel_openmp
-// RUN         : ./parallel_openmp <N> <threads>   e.g.  ./parallel_openmp 512 4
-// OUTPUT      : C_openmp.txt  (row-major result matrix, one row per line)
-// ============================================================================
+// FILE: parallel_openmp.cpp
+// TASK: M2.T1P - Parallel Matrix Multiplication using OpenMP
+// UNIT: SIT315 Programming Paradigms, Trimester 4, 2024-25
+// AUTHOR: Jahan Garg | Roll: 2410994805
+//
+// Parallelises C = A x B using OpenMP's #pragma omp parallel for
+// with collapse(2) and static scheduling.
+//
+// Unlike std::thread, OpenMP uses a pre-initialised thread pool so there is
+// no per-call thread creation cost. collapse(2) fuses the outer i and j loops
+// into N^2 independent tasks rather than N row-level tasks, giving the
+// scheduler finer granularity and better load balance.
+//
+// No race condition exists: each (i,j) pair writes only to C[i*N+j],
+// a unique memory location not shared with any other iteration.
+//
+// Compile: g++ -std=c++11 -O2 -fopenmp parallel_openmp.cpp -o parallel_openmp
+// Run:     ./parallel_openmp <N> <threads>    e.g. ./parallel_openmp 512 4
+// Output:  C_openmp.txt (result matrix, one row per line)
 
-// ── Standard library headers ─────────────────────────────────────────────────
-#include <iostream>   // std::cout — console output for results
-#include <vector>     // std::vector — heap-allocated matrices
-#include <chrono>     // high_resolution_clock — microsecond-precision timing
-#include <cstdlib>    // rand(), srand(), atoi() — RNG and argument parsing
-#include <fstream>    // std::ofstream — writing result matrix to file
-#include <omp.h>      // OpenMP API — omp_set_num_threads(), #pragma omp directives
+#include <iostream>   // std::cout
+#include <vector>     // std::vector
+#include <chrono>     // high_resolution_clock
+#include <cstdlib>    // rand(), srand(), atoi()
+#include <fstream>    // std::ofstream
+#include <omp.h>      // omp_set_num_threads() and OpenMP directives
 
 using namespace std;
 using namespace std::chrono;
 
-// ── Function: fillMatrixWithRandomValues ────────────────────────────────────
-// Fills every element of the flat row-major matrix vector with a random
-// integer in [0, 99]. Called sequentially before the parallel region because
-// rand() is NOT thread-safe (shared internal state). Fixed seed srand(0)
-// in main guarantees identical matrices A and B across all three programs.
-// Parameters:
-//   matrix     — reference to the flat vector to fill
-//   matrixSize — N, the side length of the square matrix
+// Fills every element of a flat NxN matrix vector with a random int in [0, 99].
+// rand() is NOT thread-safe, so this must run sequentially before the OpenMP
+// parallel region. srand(0) in main ensures the same matrices are generated
+// every run, matching sequential.cpp and parallel_thread.cpp for comparison.
 void fillMatrixWithRandomValues(vector<int> &matrix, int matrixSize)
 {
     for (int i = 0; i < matrixSize * matrixSize; i++)
     {
-        matrix[i] = rand() % 100;   // value in [0, 99]
+        matrix[i] = rand() % 100;
     }
 }
 
-// ── Function: calculateChecksum ─────────────────────────────────────────────
-// Sums all elements of result matrix C as a 64-bit integer.
-// Computed after the OpenMP parallel region to verify correctness against
-// the sequential and std::thread implementations.
+// Sums all elements of C into a 64-bit integer for correctness verification.
+// Called after the parallel region completes. A matching checksum with
+// sequential.cpp confirms the parallel result is numerically identical.
 long long calculateChecksum(const vector<int> &matrixC)
 {
-    long long totalChecksum = 0;
+    long long total = 0;
     for (int val : matrixC)
-        totalChecksum += val;
-    return totalChecksum;
+        total += val;
+    return total;
 }
 
-// ── main ─────────────────────────────────────────────────────────────────────
 int main(int argc, char *argv[])
 {
-    // ── Argument validation ──────────────────────────────────────────────────
+    // Validate command-line arguments
     if (argc < 3)
     {
         cout << "Usage: ./parallel_openmp N threads\n";
-        cout << "  N       — square matrix dimension (1 to 2000)\n";
-        cout << "  threads — number of OpenMP threads (1 to 8)\n";
+        cout << "  N       - square matrix dimension (1 to 2000)\n";
+        cout << "  threads - number of OpenMP threads (1 to 8)\n";
         return 1;
     }
 
@@ -75,76 +71,74 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    // ── Matrix allocation ────────────────────────────────────────────────────
-    // Flat 1-D vectors in row-major order. matrixC pre-zeroed.
+    // Allocate matrices as flat vectors in row-major order.
+    // matrixC is zero-initialised before the parallel region writes to it.
     vector<int> matrixA(matrixSize * matrixSize);
     vector<int> matrixB(matrixSize * matrixSize);
     vector<int> matrixC(matrixSize * matrixSize, 0);
 
-    // ── Matrix initialisation ────────────────────────────────────────────────
-    // Sequential: rand() is not thread-safe; srand(0) ensures reproducibility
+    // Fill A and B sequentially. rand() is not thread-safe so this must
+    // complete before entering the parallel region.
     srand(0);
     fillMatrixWithRandomValues(matrixA, matrixSize);
     fillMatrixWithRandomValues(matrixB, matrixSize);
 
-    // ── Set OpenMP thread count ──────────────────────────────────────────────
-    // Must be called before the parallel region. Overrides the default (which
-    // would use OMP_NUM_THREADS environment variable or hardware concurrency).
+    // Set the thread count explicitly before the parallel region.
+    // Without this call, OpenMP would use OMP_NUM_THREADS or the hardware
+    // concurrency default, which may not match the command-line argument.
     omp_set_num_threads(numThreads);
 
-    // ── Timed parallel computation ───────────────────────────────────────────
-    // Timer starts before the pragma so that OpenMP region entry overhead is
-    // included in the measurement (consistent with std::thread timing)
-    auto start = high_resolution_clock::now();
+    // Timer starts before the pragma so that OpenMP region entry cost
+    // (thread pool wake-up, work distribution) is included in the measurement.
+    // This keeps timing consistent with how parallel_thread.cpp is measured.
+    auto startTime = high_resolution_clock::now();
 
-    // ── OpenMP parallel region ───────────────────────────────────────────────
-    // parallel for — distributes loop iterations across numThreads threads
-    //                from the pre-initialised OpenMP thread pool (no creation
-    //                cost, unlike std::thread which constructs threads here)
+    // Parallelise the outer two loops over the N^2 output elements.
     //
-    // collapse(2) — fuses the outer i-loop (N iterations) and middle j-loop
-    //               (N iterations) into a single loop of N^2 iterations.
-    //               Each of the N^2 (i,j) pairs is an independent task.
-    //               At N=512, this exposes 262,144 tasks vs. 512 with row-only
-    //               partitioning — finer granularity improves load balance.
+    // parallel for: distributes loop iterations across the OpenMP thread pool.
+    //   The pool is pre-initialised, so threads are reused across calls with
+    //   no creation overhead (unlike std::thread which constructs new threads).
     //
-    // schedule(static) — divides the N^2 tasks into equal-sized contiguous
-    //                    chunks, assigned to threads at compile/entry time.
-    //                    Minimal scheduling overhead; optimal for uniform work.
+    // collapse(2): fuses the i-loop (N iters) and j-loop (N iters) into one
+    //   combined loop of N^2 iterations. At N=512 this exposes 262,144
+    //   independent tasks instead of 512 row-level tasks, giving better
+    //   load balance across threads especially when N % numThreads != 0.
     //
-    // No race condition: C[i*N+j] is written by exactly one (i,j) combination.
-    // cellSum is a private variable — each thread iteration has its own copy.
-    // matrixA and matrixB are read-only shared data — no write conflict.
+    // schedule(static): divides the N^2 tasks into equal contiguous chunks
+    //   assigned to threads before execution starts. Minimal overhead, and
+    //   correct because every (i,j) task does the same amount of work.
+    //
+    // cellSum is private by default (declared inside the loop body),
+    //   so each iteration has its own accumulator with no sharing needed.
+    // matrixA and matrixB are read-only shared data with no write conflicts.
+    // matrixC writes are conflict-free: each (i,j) maps to a unique index.
 #pragma omp parallel for collapse(2) schedule(static)
     for (int i = 0; i < matrixSize; i++)
     {
         for (int j = 0; j < matrixSize; j++)
         {
-            int cellSum = 0;   // private accumulator — unique per (i,j) iteration
+            int cellSum = 0;
 
-            // Inner k-loop: dot product of row i of A and column j of B
-            // Kept sequential: parallelising k would require atomic reduction,
-            // adding synchronisation overhead that outweighs any benefit here
+            // Dot product of row i from A and column j from B.
+            // The inner k-loop is kept sequential: parallelising it would
+            // require an atomic reduction on cellSum, adding overhead that
+            // exceeds any gain for the matrix sizes used here.
             for (int k = 0; k < matrixSize; k++)
             {
-                // A[i][k] = matrixA[i*N + k]  (row-major, cache-friendly)
-                // B[k][j] = matrixB[k*N + j]  (column access across k)
                 cellSum += matrixA[i * matrixSize + k] * matrixB[k * matrixSize + j];
             }
 
-            // Write result: this element is exclusively owned by this (i,j) task
             matrixC[i * matrixSize + j] = cellSum;
         }
     }
-    // Implicit barrier at end of parallel for — all threads complete before
-    // execution continues past this point. Timer stops after this barrier.
+    // The implicit barrier at the end of "parallel for" ensures all threads
+    // have finished writing before execution proceeds past this point.
 
-    auto end = high_resolution_clock::now();
-    long long executionTimeMicroseconds =
-        duration_cast<microseconds>(end - start).count();
+    auto endTime = high_resolution_clock::now();
+    long long elapsedMicroseconds =
+        duration_cast<microseconds>(endTime - startTime).count();
 
-    // ── Write result matrix to file ──────────────────────────────────────────
-    // Row-major format (one row per line) — diff with C_seq.txt for full verify
+    // Write result matrix to file for diff-based verification against C_seq.txt
     ofstream outputFile("C_openmp.txt");
     if (!outputFile)
     {
@@ -161,15 +155,14 @@ int main(int argc, char *argv[])
     }
     outputFile.close();
 
-    // ── Checksum and results ─────────────────────────────────────────────────
-    long long resultChecksum = calculateChecksum(matrixC);
+    long long checksum = calculateChecksum(matrixC);
 
     cout << "N               = " << matrixSize << "\n";
     cout << "Threads         = " << numThreads << "\n";
     cout << "Method          = OpenMP\n";
-    cout << "Execution time  = " << executionTimeMicroseconds
-         << " us (" << executionTimeMicroseconds / 1000.0 << " ms)\n";
-    cout << "Checksum        = " << resultChecksum << "\n";
+    cout << "Execution time  = " << elapsedMicroseconds
+         << " us (" << elapsedMicroseconds / 1000.0 << " ms)\n";
+    cout << "Checksum        = " << checksum << "\n";
     cout << "Output          = C_openmp.txt\n";
 
     return 0;

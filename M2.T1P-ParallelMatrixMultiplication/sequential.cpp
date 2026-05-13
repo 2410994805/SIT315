@@ -1,119 +1,92 @@
-// ============================================================================
-// FILE        : sequential.cpp
-// TASK        : M2.T1P — Sequential Matrix Multiplication Baseline
-// UNIT        : SIT315 Programming Paradigms, Trimester 4, 2024-25
-// AUTHOR      : Jahan Garg | Roll: 2410994805
-// DESCRIPTION : Computes C = A x B for two N×N integer matrices using a
-//               classic triple-nested loop (O(N^3)). Serves as the sequential
-//               baseline against which all parallel implementations are
-//               compared. Execution time is measured via std::chrono and
-//               result correctness is verified by a checksum.
-// COMPILE     : g++ -std=c++11 -O2 sequential.cpp -o sequential
-// RUN         : ./sequential <N>          e.g.  ./sequential 512
-// OUTPUT      : C_seq.txt  (row-major result matrix, one row per line)
-// ============================================================================
+// FILE: sequential.cpp
+// TASK: M2.T1P - Sequential Matrix Multiplication Baseline
+// UNIT: SIT315 Programming Paradigms, Trimester 4, 2024-25
+// AUTHOR: Jahan Garg | Roll: 2410994805
+//
+// Computes C = A x B for two NxN integer matrices using a classic
+// triple-nested loop (O(N^3)). This is the sequential baseline used
+// to measure speedup for parallel implementations.
+//
+// Execution time is measured with std::chrono (microseconds) and
+// wraps only the multiplication, not matrix fill or file write.
+// A checksum of all elements in C is printed for correctness checks.
+//
+// Compile: g++ -std=c++11 -O2 sequential.cpp -o sequential
+// Run:     ./sequential <N>       e.g. ./sequential 512
+// Output:  C_seq.txt (result matrix, one row per line)
 
-// ── Standard library headers ─────────────────────────────────────────────────
-#include <iostream>   // std::cout — console output for results
-#include <vector>     // std::vector — heap-allocated, dynamic-size arrays
-#include <chrono>     // high_resolution_clock — microsecond-precision timing
-#include <cstdlib>    // rand(), srand(), atoi() — RNG and argument parsing
-#include <fstream>    // std::ofstream — writing result matrix to file
+#include <iostream>   // std::cout
+#include <vector>     // std::vector
+#include <chrono>     // high_resolution_clock
+#include <cstdlib>    // rand(), srand(), atoi()
+#include <fstream>    // std::ofstream
 
 using namespace std;
 using namespace std::chrono;
 
-// ── Function: fillMatrixWithRandomValues ────────────────────────────────────
-// Fills every element of a flat 1-D vector (representing an N×N matrix stored
-// in row-major order) with a pseudo-random integer in the range [0, 99].
-// Using the same seed (srand(0) in main) guarantees that all three programs
-// (sequential, thread, OpenMP) produce identical matrices A and B, enabling
-// direct checksum comparison for correctness verification.
-// Parameters:
-//   matrix     — reference to the flat vector to fill
-//   matrixSize — N, the side length of the square matrix
+// Fills every element of a flat NxN matrix vector with a random int in [0, 99].
+// The matrix is stored in row-major order: element [i][j] lives at index i*N+j.
+// srand(0) is called in main before this function so the same values are
+// produced every run, which makes checksums comparable across all three programs.
 void fillMatrixWithRandomValues(vector<int> &matrix, int matrixSize)
 {
-    // Iterate over all N*N elements in linear order and assign random values
     for (int i = 0; i < matrixSize * matrixSize; i++)
     {
-        matrix[i] = rand() % 100;   // value in [0, 99]
+        matrix[i] = rand() % 100;
     }
 }
 
-// ── Function: multiplyMatrices ──────────────────────────────────────────────
-// Performs sequential matrix multiplication C = A × B using three nested
-// loops (i, j, k). Time complexity: O(N^3). Space complexity: O(1) auxiliary.
-//
-// Memory layout: all matrices are stored as flat 1-D vectors in row-major
-// order. Element at row i, column j is accessed as matrix[i * N + j].
-// This layout ensures that the inner k-loop accesses matrixA in row-major
-// order (sequential/cache-friendly), although matrixB is accessed column-
-// major (potential cache miss). For this task the focus is parallelism
-// correctness, not cache-oblivious optimisation.
-//
-// Parameters:
-//   matrixA, matrixB — read-only input matrices (const reference)
-//   matrixC          — output matrix (reference, pre-zeroed in main)
-//   matrixSize       — N
+// Computes C = A x B using three nested loops (i, j, k).
+// Each element C[i][j] is the dot product of row i from A and column j from B.
+// All three matrices are stored as flat vectors in row-major order.
+// The inner k-loop accesses A sequentially (cache-friendly) and B
+// by column (stride N), which is the standard trade-off in a naive triple loop.
+// matrixC must be pre-zeroed before this call.
 void multiplyMatrices(const vector<int> &matrixA,
                       const vector<int> &matrixB,
                       vector<int>       &matrixC,
                       int                matrixSize)
 {
-    // Outer loop — iterates over each row i of output matrix C
     for (int i = 0; i < matrixSize; i++)
     {
-        // Middle loop — iterates over each column j of output matrix C
         for (int j = 0; j < matrixSize; j++)
         {
-            int cellSum = 0;   // accumulator for dot product of row i and col j
+            int cellSum = 0;
 
-            // Inner loop — computes dot product: sum of A[i][k] * B[k][j]
+            // Dot product: sum of A[i][k] * B[k][j] over all k
             for (int k = 0; k < matrixSize; k++)
             {
-                // Row-major index: A[i][k] = matrixA[i*N + k]
-                //                  B[k][j] = matrixB[k*N + j]
                 cellSum += matrixA[i * matrixSize + k] * matrixB[k * matrixSize + j];
             }
 
-            // Store completed dot product in row-major position of C
             matrixC[i * matrixSize + j] = cellSum;
         }
     }
 }
 
-// ── Function: calculateChecksum ─────────────────────────────────────────────
-// Computes a simple sum-of-all-elements checksum over the result matrix C.
-// Using long long avoids integer overflow for large N (e.g., N=512 with
-// values up to ~99*99*512 ≈ 5M per element, times 512*512 elements).
-// The same fixed seed srand(0) guarantees the same checksum across all
-// three implementations if their multiplication logic is correct.
-// Parameters:
-//   matrixC — const reference to the result matrix
-// Returns:
-//   64-bit integer checksum
+// Sums all elements of the result matrix C into a 64-bit integer.
+// long long is used to avoid overflow at large N (N=512 can produce
+// element values up to ~99*99*512 = ~5 million; total sum ~1.3 billion).
+// Identical checksums across sequential, thread, and OpenMP runs confirm
+// that all three programs computed the same result matrix.
 long long calculateChecksum(const vector<int> &matrixC)
 {
-    long long totalChecksum = 0;
+    long long total = 0;
     for (int val : matrixC)
-        totalChecksum += val;   // accumulate each element
-    return totalChecksum;
+        total += val;
+    return total;
 }
 
-// ── main ─────────────────────────────────────────────────────────────────────
 int main(int argc, char *argv[])
 {
-    // ── Argument validation ──────────────────────────────────────────────────
-    // Require exactly one command-line argument: matrix dimension N
+    // Validate command-line argument
     if (argc < 2)
     {
         cout << "Usage: ./sequential N\n";
-        cout << "  N — square matrix dimension (1 to 2000)\n";
+        cout << "  N - square matrix dimension (1 to 2000)\n";
         return 1;
     }
 
-    // Parse N from string argument; atoi returns 0 for non-numeric input
     int matrixSize = atoi(argv[1]);
     if (matrixSize <= 0 || matrixSize > 2000)
     {
@@ -121,33 +94,29 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    // ── Matrix allocation ────────────────────────────────────────────────────
-    // Allocate three flat vectors: A (input), B (input), C (output, zeroed)
-    // Size = N*N integers. Row-major layout: element [i][j] at index i*N+j
+    // Allocate matrices as flat vectors in row-major order.
+    // matrixC is zero-initialised so accumulated sums are correct.
     vector<int> matrixA(matrixSize * matrixSize);
     vector<int> matrixB(matrixSize * matrixSize);
-    vector<int> matrixC(matrixSize * matrixSize, 0);   // initialised to zero
+    vector<int> matrixC(matrixSize * matrixSize, 0);
 
-    // ── Matrix initialisation ────────────────────────────────────────────────
-    // Fixed seed ensures reproducibility and cross-program checksum matching
+    // Seed the RNG once with a fixed value so A and B are identical
+    // every run and across all three programs (enables checksum comparison).
     srand(0);
     fillMatrixWithRandomValues(matrixA, matrixSize);
     fillMatrixWithRandomValues(matrixB, matrixSize);
 
-    // ── Timed computation ────────────────────────────────────────────────────
-    // Timer starts immediately before multiplication and stops immediately
-    // after. Excludes matrix fill and file write as per task requirements.
-    auto start = high_resolution_clock::now();
+    // Time only the multiplication. Matrix fill and file write are excluded
+    // so the timer reflects pure compute time, matching the parallel programs.
+    auto startTime = high_resolution_clock::now();
     multiplyMatrices(matrixA, matrixB, matrixC, matrixSize);
-    auto end = high_resolution_clock::now();
+    auto endTime = high_resolution_clock::now();
 
-    // Convert elapsed time from nanoseconds to microseconds
-    long long executionTimeMicroseconds =
-        duration_cast<microseconds>(end - start).count();
+    long long elapsedMicroseconds =
+        duration_cast<microseconds>(endTime - startTime).count();
 
-    // ── Write result matrix to file ──────────────────────────────────────────
-    // Outputs C in row-major format (one row per line) for diff-based
-    // correctness comparison against parallel implementations
+    // Write the result matrix to a text file for diff-based correctness checks.
+    // Format: one row per line, values separated by spaces.
     ofstream outputFile("C_seq.txt");
     if (!outputFile)
     {
@@ -160,18 +129,17 @@ int main(int argc, char *argv[])
         {
             outputFile << matrixC[i * matrixSize + j] << " ";
         }
-        outputFile << "\n";   // newline at end of each row
+        outputFile << "\n";
     }
     outputFile.close();
 
-    // ── Checksum and results ─────────────────────────────────────────────────
-    long long resultChecksum = calculateChecksum(matrixC);
+    long long checksum = calculateChecksum(matrixC);
 
     cout << "N               = " << matrixSize << "\n";
     cout << "Method          = Sequential\n";
-    cout << "Execution time  = " << executionTimeMicroseconds
-         << " us (" << executionTimeMicroseconds / 1000.0 << " ms)\n";
-    cout << "Checksum        = " << resultChecksum << "\n";
+    cout << "Execution time  = " << elapsedMicroseconds
+         << " us (" << elapsedMicroseconds / 1000.0 << " ms)\n";
+    cout << "Checksum        = " << checksum << "\n";
     cout << "Output file     = C_seq.txt\n";
 
     return 0;

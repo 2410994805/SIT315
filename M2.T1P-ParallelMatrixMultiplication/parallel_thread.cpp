@@ -1,64 +1,51 @@
-// ============================================================================
-// FILE        : parallel_thread.cpp
-// TASK        : M2.T1P — Parallel Matrix Multiplication (std::thread)
-// UNIT        : SIT315 Programming Paradigms, Trimester 4, 2024-25
-// AUTHOR      : Jahan Garg | Roll: 2410994805
-// DESCRIPTION : Parallelises C = A x B using C++11 std::thread by dividing
-//               the output matrix C into contiguous row bands, one per thread
-//               (output data decomposition). Each thread computes its
-//               assigned rows independently — no mutex required because
-//               threads write to disjoint memory regions. A join() barrier
-//               ensures all threads complete before timing stops and results
-//               are consumed.
-// COMPILE     : g++ -std=c++11 -O2 parallel_thread.cpp -o parallel_thread
-// RUN         : ./parallel_thread <N> <threads>    e.g.  ./parallel_thread 512 4
-// OUTPUT      : C_thread.txt  (row-major result matrix, one row per line)
-// ============================================================================
+// FILE: parallel_thread.cpp
+// TASK: M2.T1P - Parallel Matrix Multiplication using std::thread
+// UNIT: SIT315 Programming Paradigms, Trimester 4, 2024-25
+// AUTHOR: Jahan Garg | Roll: 2410994805
+//
+// Parallelises C = A x B using C++11 std::thread.
+// The output matrix C is divided into contiguous row bands, one per thread
+// (output data decomposition). Each thread computes its assigned rows
+// independently with no mutex needed because threads write to disjoint
+// memory regions. A join() barrier waits for all threads before timing stops.
+//
+// Compile: g++ -std=c++11 -O2 parallel_thread.cpp -o parallel_thread
+// Run:     ./parallel_thread <N> <threads>    e.g. ./parallel_thread 512 4
+// Output:  C_thread.txt (result matrix, one row per line)
 
-// ── Standard library headers ─────────────────────────────────────────────────
-#include <iostream>   // std::cout — console output for results
-#include <vector>     // std::vector — heap-allocated matrices and thread pool
-#include <thread>     // std::thread — C++11 portable threading
-#include <chrono>     // high_resolution_clock — microsecond-precision timing
-#include <cstdlib>    // rand(), srand(), atoi() — RNG and argument parsing
-#include <fstream>    // std::ofstream — writing result matrix to file
+#include <iostream>   // std::cout
+#include <vector>     // std::vector
+#include <thread>     // std::thread
+#include <chrono>     // high_resolution_clock
+#include <cstdlib>    // rand(), srand(), atoi()
+#include <fstream>    // std::ofstream
 
 using namespace std;
 using namespace std::chrono;
 
-// ── Function: fillMatrixWithRandomValues ────────────────────────────────────
-// Fills every element of the flat row-major matrix vector with a random
-// integer in [0, 99]. Called once before threading starts using the shared
-// srand(0) seed. rand() is NOT thread-safe, so this must remain sequential.
-// Parameters:
-//   matrix     — reference to the flat vector to fill
-//   matrixSize — N, the side length of the square matrix
+// Fills every element of a flat NxN matrix vector with a random int in [0, 99].
+// rand() is NOT thread-safe (it uses shared internal state), so this function
+// must be called sequentially before any threads are spawned.
+// srand(0) in main ensures the same matrices are produced every run.
 void fillMatrixWithRandomValues(vector<int> &matrix, int matrixSize)
 {
     for (int i = 0; i < matrixSize * matrixSize; i++)
     {
-        matrix[i] = rand() % 100;   // value in [0, 99]
+        matrix[i] = rand() % 100;
     }
 }
 
-// ── Function: multiplyMatrixRows ────────────────────────────────────────────
-// THREAD WORKER — computes a contiguous band of rows [startRow, endRow) of
-// the output matrix C = A × B. Each thread receives its own non-overlapping
-// row range, so no two threads ever write to the same element of C.
-// This eliminates any data race on C without requiring a mutex or lock.
+// Thread worker function. Computes rows [startRow, endRow) of output matrix C.
+// Each thread gets a non-overlapping row range, so no two threads write to
+// the same element of C. This means no mutex or atomic operations are needed.
 //
 // Why row partitioning?
-//   - Each row of C is fully determined by one row of A and all of B.
-//   - Rows are independent — computing C[i][*] does not affect C[i'][*].
-//   - Contiguous row bands maximise cache locality for accesses to matrixA.
+//   Each row of C depends only on one row of A and the entire read-only matrix B.
+//   Rows of C are fully independent of each other, so splitting by row
+//   achieves zero inter-thread data dependency with no synchronisation overhead.
 //
-// Parameters:
-//   matrixA    — const ref to input matrix A (read-only, shared across threads)
-//   matrixB    — const ref to input matrix B (read-only, shared across threads)
-//   matrixC    — ref to output matrix C (each thread writes a disjoint band)
-//   matrixSize — N (full matrix dimension)
-//   startRow   — first row this thread is responsible for (inclusive)
-//   endRow     — one past the last row this thread handles (exclusive)
+// matrixA and matrixB are passed as const references (read-only, shared safely).
+// matrixC is passed as a mutable reference; each thread writes only its band.
 void multiplyMatrixRows(const vector<int> &matrixA,
                         const vector<int> &matrixB,
                         vector<int>       &matrixC,
@@ -66,51 +53,43 @@ void multiplyMatrixRows(const vector<int> &matrixA,
                         int                startRow,
                         int                endRow)
 {
-    // Iterate only over the rows assigned to this thread
     for (int i = startRow; i < endRow; i++)
     {
-        // For each column j in the assigned row i
         for (int j = 0; j < matrixSize; j++)
         {
-            int cellSum = 0;   // accumulator for dot product A[i][*] · B[*][j]
+            int cellSum = 0;
 
-            // Inner k-loop: dot product of row i of A with column j of B
+            // Dot product of row i from A and column j from B
             for (int k = 0; k < matrixSize; k++)
             {
-                // A[i][k] = matrixA[i*N + k]  (row-major)
-                // B[k][j] = matrixB[k*N + j]  (column access — sequential k)
                 cellSum += matrixA[i * matrixSize + k] * matrixB[k * matrixSize + j];
             }
 
-            // Write dot product result — this element is unique to this thread
+            // This element belongs exclusively to this thread's row band
             matrixC[i * matrixSize + j] = cellSum;
         }
     }
-    // Thread function returns here — join() in main will detect completion
 }
 
-// ── Function: calculateChecksum ─────────────────────────────────────────────
-// Sums all elements of result matrix C as a 64-bit integer.
-// Used post-join to verify that parallel output matches the sequential result.
-// Matching checksums across all three programs prove correctness.
+// Sums all elements of C into a 64-bit integer for correctness verification.
+// A matching checksum between this program and sequential.cpp confirms that
+// the parallel decomposition produced the correct result.
 long long calculateChecksum(const vector<int> &matrixC)
 {
-    long long totalChecksum = 0;
+    long long total = 0;
     for (int val : matrixC)
-        totalChecksum += val;
-    return totalChecksum;
+        total += val;
+    return total;
 }
 
-// ── main ─────────────────────────────────────────────────────────────────────
 int main(int argc, char *argv[])
 {
-    // ── Argument validation ──────────────────────────────────────────────────
-    // Require N (matrix size) and T (thread count) as command-line arguments
+    // Validate command-line arguments
     if (argc < 3)
     {
         cout << "Usage: ./parallel_thread N threads\n";
-        cout << "  N       — square matrix dimension (1 to 2000)\n";
-        cout << "  threads — number of parallel threads (1 to 8)\n";
+        cout << "  N       - square matrix dimension (1 to 2000)\n";
+        cout << "  threads - number of parallel threads (1 to 8)\n";
         return 1;
     }
 
@@ -123,66 +102,59 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    // ── Matrix allocation ────────────────────────────────────────────────────
-    // Flat 1-D vectors in row-major order. matrixC is pre-zeroed.
+    // Allocate matrices. matrixC is zero-initialised before workers write to it.
     vector<int> matrixA(matrixSize * matrixSize);
     vector<int> matrixB(matrixSize * matrixSize);
     vector<int> matrixC(matrixSize * matrixSize, 0);
 
-    // ── Matrix initialisation ────────────────────────────────────────────────
-    // Fixed seed srand(0) ensures identical A and B as sequential program
+    // Seed and fill A and B sequentially. rand() is not thread-safe so this
+    // must complete before any thread is spawned. srand(0) matches the seed
+    // used in sequential.cpp so checksums can be compared directly.
     srand(0);
     fillMatrixWithRandomValues(matrixA, matrixSize);
     fillMatrixWithRandomValues(matrixB, matrixSize);
 
-    // ── Thread pool preparation ──────────────────────────────────────────────
-    // Pre-allocate vector capacity to avoid reallocation during emplace_back
+    // Pre-allocate the thread vector to avoid reallocation inside the spawn loop
     vector<thread> workers;
     workers.reserve(numThreads);
 
-    // Compute base rows per thread and the remainder (for uneven division)
-    // e.g., N=512, T=3: rowsPerThread=170, extraRows=2
-    //   Thread 0 gets 171 rows, thread 1 gets 171 rows, thread 2 gets 170
+    // Divide N rows into T bands. If N is not evenly divisible by T,
+    // the remainder rows (N % T) are distributed one extra row per thread
+    // to the first (N % T) threads, ensuring all rows are always covered.
+    // Example: N=512, T=3 -> rowsPerThread=170, extraRows=2
+    //          Thread 0 gets 171 rows, thread 1 gets 171, thread 2 gets 170.
     int rowsPerThread = matrixSize / numThreads;
-    int extraRows     = matrixSize % numThreads;   // first extraRows threads get +1 row
+    int extraRows     = matrixSize % numThreads;
     int startRow      = 0;
 
-    // ── Timed parallel computation ───────────────────────────────────────────
-    // Timer starts before thread creation so that thread spawning cost is
-    // included in the parallel execution time measurement
-    auto start = high_resolution_clock::now();
+    // Timer starts before thread creation so spawning cost is included.
+    // This gives a fair wall-clock parallel time consistent with OpenMP timing.
+    auto startTime = high_resolution_clock::now();
 
-    // Spawn T threads, each assigned a contiguous band of rows
     for (int t = 0; t < numThreads; t++)
     {
-        // First extraRows threads get one extra row to handle remainder evenly
         int rows   = rowsPerThread + (t < extraRows ? 1 : 0);
         int endRow = startRow + rows;
 
-        // Spawn thread: pass A and B as const references (read-only, zero copy)
-        // Pass C as mutable reference (each thread writes its own disjoint band)
+        // cref wraps A and B as const references (no copy, safe to share).
+        // ref wraps C as a mutable reference (each thread's band is disjoint).
         workers.emplace_back(multiplyMatrixRows,
                              cref(matrixA), cref(matrixB), ref(matrixC),
                              matrixSize, startRow, endRow);
 
-        startRow = endRow;   // advance start for next thread's band
+        startRow = endRow;
     }
 
-    // ── Join barrier ─────────────────────────────────────────────────────────
-    // Block main thread until every worker finishes its row band.
-    // join() is the synchronisation point — matrixC is only safe to read
-    // after all joins complete.
+    // Wait for every thread to finish. join() is the synchronisation barrier.
+    // matrixC is only safe to read after all joins complete.
     for (auto &th : workers)
         th.join();
 
-    // Timer stops after all threads have joined — full wall-clock parallel time
-    auto end = high_resolution_clock::now();
+    auto endTime = high_resolution_clock::now();
+    long long elapsedMicroseconds =
+        duration_cast<microseconds>(endTime - startTime).count();
 
-    long long executionTimeMicroseconds =
-        duration_cast<microseconds>(end - start).count();
-
-    // ── Write result matrix to file ──────────────────────────────────────────
-    // Row-major format (one row per line) — diff with C_seq.txt for full verify
+    // Write result matrix to file for diff-based verification against C_seq.txt
     ofstream outputFile("C_thread.txt");
     if (!outputFile)
     {
@@ -199,15 +171,14 @@ int main(int argc, char *argv[])
     }
     outputFile.close();
 
-    // ── Checksum and results ─────────────────────────────────────────────────
-    long long resultChecksum = calculateChecksum(matrixC);
+    long long checksum = calculateChecksum(matrixC);
 
     cout << "N               = " << matrixSize << "\n";
     cout << "Threads         = " << numThreads << "\n";
     cout << "Method          = std::thread\n";
-    cout << "Execution time  = " << executionTimeMicroseconds
-         << " us (" << executionTimeMicroseconds / 1000.0 << " ms)\n";
-    cout << "Checksum        = " << resultChecksum << "\n";
+    cout << "Execution time  = " << elapsedMicroseconds
+         << " us (" << elapsedMicroseconds / 1000.0 << " ms)\n";
+    cout << "Checksum        = " << checksum << "\n";
     cout << "Output          = C_thread.txt\n";
 
     return 0;
