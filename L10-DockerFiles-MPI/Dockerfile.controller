@@ -1,0 +1,38 @@
+FROM ubuntu:latest
+
+ENV ROLE=controller
+
+# Install Open MPI and SSH client
+RUN apt-get update && apt-get install -y \
+    openmpi-bin \
+    openssh-client openssh-server iproute2 iputils-ping \
+    build-essential libopenmpi-dev
+
+# Create an SSH key pair for the 'root' user with password "SIT315"
+RUN ssh-keygen -q -N "" -t rsa -f /root/.ssh/id_rsa && \
+    echo 'root:SIT315' | chpasswd && \
+    cp /root/.ssh/id_rsa.pub /root/.ssh/authorized_keys && \
+    echo "StrictHostKeyChecking no" >> /etc/ssh/ssh_config
+
+COPY keys/id_rsa.pub /root/.ssh/id_rsa.pub
+COPY keys/id_rsa /root/.ssh/id_rsa 
+
+# Set the correct permissions for the SSH private key. 
+# Otherwise, SSH will not work as the permissions are too loose
+# Modify the permissions of the private key to 600 (rw-------) in the COPY Line - MS 2023-09-05
+RUN chmod 600 /root/.ssh/id_rsa
+
+# Allow root login in SSH (BAD PRACTICE - MS 2024-09-01)
+RUN echo 'PermitRootLogin yes' >> /etc/ssh/sshd_config
+RUN service ssh restart
+
+# Copy source code to the container
+COPY mpi_palindrome.cpp /mpi_palindrome.cpp
+# RUN mpicxx /mpi_palindrome.cpp -o /mpi_palindrome
+RUN mpicxx -std=c++17 ./mpi_palindrome.cpp -o ./mpi_palindrome
+
+COPY rankfile.txt /rankfile.txt
+
+# CMD ["/bin/bash"]
+# CMD ["/usr/sbin/sshd", "-D"]
+CMD service ssh start && bash

@@ -1,0 +1,4 @@
+rank 0=controller-container slots=1
+rank 1=producer-container slots=1
+rank 2=consumer-container slots=1
+

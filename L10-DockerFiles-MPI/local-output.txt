@@ -1,0 +1,11 @@
+Producer 1 started
+Producer 1 sent 10 tuples to consumer2
+Consumer 2 started
+Little Endian
+Number of processes: 3
+Elements per Process: 20
+Controller 0 started
+Consumer 2 received data from producer 1: 
+Consumer 2 found all pairs matching and sent 1 to the controller.
+Controller0 received data from Consumer2: 1
+MPI Is Palindrome?: TRUE

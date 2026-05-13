@@ -1,0 +1,14 @@
+Consumer 2 started
+Little Endian
+Number of processes: 3
+Elements per Process: 20
+Controller 0 started
+Producer 1 started
+Producer 1 sent 10 tuples to consumer2
+Consumer 2 received data from producer 1:
+Consumer2 found a mismatch and will send 0 to the controller.
+Controller0 received data from Consumer2: 0
+Consumer 2 found the broken palindrome condition
+Consumer 2 found all pairs matching and sent 1 to the controller.
+Controller sent abort signal to Producer 1
+MPI Is Palindrome?: FALSE
