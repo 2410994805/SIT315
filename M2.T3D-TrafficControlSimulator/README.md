@@ -1,5 +1,5 @@
 # M2.T3D — Traffic Control Simulator
-**SIT315 Programming Paradigms | Trimester 4, 2024-25**  
+**SIT315 Programming Paradigms | Semester-4**  
 **Jahan Garg | Roll: 2410994805**
 
 ## Overview
