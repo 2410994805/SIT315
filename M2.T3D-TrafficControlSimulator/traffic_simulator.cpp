@@ -1,6 +1,6 @@
 // FILE: traffic_simulator.cpp
 // TASK: M2.T3D - Traffic Control Simulator (Distinction)
-// UNIT: SIT315 Programming Paradigms, Trimester 4, 2024-25
+// UNIT: SIT315 Programming Paradigms, Semester-4
 // AUTHOR: Jahan Garg | Roll: 2410994805
 //
 // Implements a multi-threaded traffic signal monitoring system using the
